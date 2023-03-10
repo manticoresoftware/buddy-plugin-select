@@ -11,10 +11,10 @@
 namespace Manticoresearch\Buddy\Plugin\Select;
 
 use Manticoresearch\Buddy\Core\Error\QueryParseError;
-use Manticoresearch\Buddy\Core\Network\Request as NetworkRequest;
-use Manticoresearch\Buddy\Core\Plugin\Request as BaseRequest;
+use Manticoresearch\Buddy\Core\Network\Request;
+use Manticoresearch\Buddy\Core\Plugin\BasePayload;
 
-final class Request extends BaseRequest {
+final class Payload extends BasePayload {
 	const HANDLED_TABLES = [
 		'information_schema.files',
 		'information_schema.tables',
@@ -36,11 +36,11 @@ final class Request extends BaseRequest {
 	}
 
   /**
-	 * @param NetworkRequest $request
+	 * @param Request $request
 	 * @return static
 	 * @throws QueryParseError
 	 */
-	public static function fromNetworkRequest(NetworkRequest $request): static {
+	public static function fromRequest(Request $request): static {
 		$self = new static();
 		$self->path = $request->path;
 
@@ -93,10 +93,18 @@ final class Request extends BaseRequest {
 	}
 
 	/**
-	 * @param NetworkRequest $request
+	 * @param Request $request
 	 * @return bool
 	 */
-	public static function hasMatch(NetworkRequest $request): bool {
-		return stripos($request->payload, 'select') === 0;
+	public static function hasMatch(Request $request): bool {
+		$isSelect = stripos($request->payload, 'select') === 0;
+		if ($isSelect) {
+			foreach (static::HANDLED_TABLES as $table) {
+				if (stripos($request->payload, $table) !== false) {
+          return true;
+        }
+			}
+		}
+		return false;
 	}
 }

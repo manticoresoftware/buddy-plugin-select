@@ -11,13 +11,13 @@
 namespace Manticoresearch\Buddy\Plugin\Select;
 
 use Manticoresearch\Buddy\Core\ManticoreSearch\Client as HTTPClient;
-use Manticoresearch\Buddy\Core\Plugin\Executor as BaseExecutor;
+use Manticoresearch\Buddy\Core\Plugin\BaseHandler;
 use Manticoresearch\Buddy\Core\Task\Task;
 use Manticoresearch\Buddy\Core\Task\TaskResult;
 use RuntimeException;
 use parallel\Runtime;
 
-final class Executor extends BaseExecutor {
+final class Handler extends BaseHandler {
 	const FIELD_MAP = [
 		'engine' => ['field', 'engine'],
 		'table_type' => ['static', 'BASE TABLE'],
@@ -30,10 +30,10 @@ final class Executor extends BaseExecutor {
 	/**
 	 * Initialize the executor
 	 *
-	 * @param Request $request
+	 * @param Payload $payload
 	 * @return void
 	 */
-	public function __construct(public Request $request) {
+	public function __construct(public Payload $payload) {
 	}
 
   /**
@@ -43,11 +43,11 @@ final class Executor extends BaseExecutor {
 	 * @throws RuntimeException
 	 */
 	public function run(Runtime $runtime): Task {
-		$this->manticoreClient->setPath($this->request->path);
+		$this->manticoreClient->setPath($this->payload->path);
 
-		$taskFn = static function (Request $request, HTTPClient $manticoreClient): TaskResult {
-			if ($request->table === 'information_schema.files' || $request->table === 'information_schema.triggers') {
-				$columns = $request->getColumns();
+		$taskFn = static function (Payload $payload, HTTPClient $manticoreClient): TaskResult {
+			if ($payload->table === 'information_schema.files' || $payload->table === 'information_schema.triggers') {
+				$columns = $payload->getColumns();
 				return new TaskResult(
 					[[
 						'total' => 0,
@@ -60,13 +60,13 @@ final class Executor extends BaseExecutor {
 			}
 
 			// TODO: maybe later we will implement multiple tables handle
-			$table = $request->where['table_name']['value'];
+			$table = $payload->where['table_name']['value'];
 			$query = "SHOW CREATE TABLE {$table}";
 			/** @var array<array{data:array<array<string,string>>}> */
 			$schemaResult = $manticoreClient->sendRequest($query)->getResult();
 			$createTable = $schemaResult[0]['data'][0]['Create Table'] ?? '';
 
-			$columns = $request->getColumns();
+			$columns = $payload->getColumns();
 			$data = [];
 			if ($createTable) {
 				$createTables = [$createTable];
@@ -74,7 +74,7 @@ final class Executor extends BaseExecutor {
 				foreach ($createTables as $createTable) {
 					$row = static::parseTableSchema($createTable);
 					$data[$i] = [];
-					foreach ($request->fields as $field) {
+					foreach ($payload->fields as $field) {
 						[$type, $value] = static::FIELD_MAP[$field] ?? ['field', $field];
 						$data[$i][$field] = match ($type) {
 							'field' => $row[$value],
@@ -100,7 +100,7 @@ final class Executor extends BaseExecutor {
 		};
 
 		return Task::createInRuntime(
-			$runtime, $taskFn, [$this->request, $this->manticoreClient]
+			$runtime, $taskFn, [$this->payload, $this->manticoreClient]
 		)->run();
 	}
 
