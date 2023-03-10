@@ -1,0 +1,32 @@
+{
+	"name": "manticoresoftware/buddy-plugin-select",
+	"description": "The Buddy failed SELECT statement handler plugin",
+	"type": "library",
+	"license": "GPL-2.0-or-later",
+	"autoload": {
+		"psr-4": {
+			"Manticoresearch\\Buddy\\Plugin\\Select\\": "src/"
+		}
+	},
+	"authors": [
+		{
+			"name": "Manticore Software Co. Ltd",
+			"email": "contact@manticoresearch.com"
+		}
+	],
+	"minimum-stability": "stable",
+	"require": {
+		"manticoresoftware/buddy-core": "dev-main"
+	},
+	"require-dev": {
+		"phpstan/phpstan": "^1.8",
+		"slevomat/coding-standard": "^8.5",
+		"squizlabs/php_codesniffer": "^3.7",
+		"phpunit/phpunit": "^9.5"
+	},
+	"config": {
+		"allow-plugins": {
+			"dealerdirect/phpcodesniffer-composer-installer": true
+		}
+	}
+}
