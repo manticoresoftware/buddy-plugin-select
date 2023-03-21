@@ -47,16 +47,7 @@ final class Handler extends BaseHandler {
 
 		$taskFn = static function (Payload $payload, HTTPClient $manticoreClient): TaskResult {
 			if ($payload->table === 'information_schema.files' || $payload->table === 'information_schema.triggers') {
-				$columns = $payload->getColumns();
-				return new TaskResult(
-					[[
-						'total' => 0,
-						'warning' => '',
-						'error' => '',
-						'columns' => $columns,
-					],
-					]
-				);
+				return $payload->getTaskResult();
 			}
 
 			// TODO: maybe later we will implement multiple tables handle
@@ -66,7 +57,7 @@ final class Handler extends BaseHandler {
 			$schemaResult = $manticoreClient->sendRequest($query)->getResult();
 			$createTable = $schemaResult[0]['data'][0]['Create Table'] ?? '';
 
-			$columns = $payload->getColumns();
+			$result = $payload->getTaskResult();
 			$data = [];
 			if ($createTable) {
 				$createTables = [$createTable];
@@ -87,16 +78,7 @@ final class Handler extends BaseHandler {
 				}
 			}
 
-			return new TaskResult(
-				[[
-					'total' => sizeof($data),
-					'error' => '',
-					'warning' => '',
-					'columns' => $columns,
-					'data' => $data,
-				],
-				]
-			);
+			return $result->data($data);
 		};
 
 		return Task::createInRuntime(

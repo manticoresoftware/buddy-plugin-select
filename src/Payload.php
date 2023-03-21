@@ -13,6 +13,8 @@ namespace Manticoresearch\Buddy\Plugin\Select;
 use Manticoresearch\Buddy\Core\Error\QueryParseError;
 use Manticoresearch\Buddy\Core\Network\Request;
 use Manticoresearch\Buddy\Core\Plugin\BasePayload;
+use Manticoresearch\Buddy\Core\Task\Column;
+use Manticoresearch\Buddy\Core\Task\TaskResult;
 
 final class Payload extends BasePayload {
 	const HANDLED_TABLES = [
@@ -75,21 +77,18 @@ final class Payload extends BasePayload {
 	}
 
 	/**
-	 * Return columns for response created from parsed fields
+	 * Return initial TaskResult that we can extend later
+	 * based on the fields we have
 	 *
-	 * @return array<array<string,array{type:string}>>
+	 * @return TaskResult
 	 */
-	public function getColumns(): array {
-		$columns = [];
+	public function getTaskResult(): TaskResult {
+		$result = TaskResult::withTotal(0);
 		foreach ($this->fields as $field) {
-			$columns[] = [
-				$field => [
-					'type' => 'string',
-				],
-			];
+			$result->column($field, Column::String);
 		}
 
-		return $columns;
+		return $result;
 	}
 
 	/**
