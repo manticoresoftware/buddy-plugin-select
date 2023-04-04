@@ -100,8 +100,8 @@ final class Payload extends BasePayload {
 		if ($isSelect) {
 			foreach (static::HANDLED_TABLES as $table) {
 				if (stripos($request->payload, $table) !== false) {
-          return true;
-        }
+					return true;
+				}
 			}
 		}
 		return false;
