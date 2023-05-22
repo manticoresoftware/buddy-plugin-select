@@ -21,6 +21,7 @@ final class Payload extends BasePayload {
 		'information_schema.files',
 		'information_schema.tables',
 		'information_schema.triggers',
+		'information_schema.column_statistics'
 	];
 
 	public string $path;

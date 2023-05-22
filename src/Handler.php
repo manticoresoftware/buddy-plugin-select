@@ -46,7 +46,7 @@ final class Handler extends BaseHandler {
 		$this->manticoreClient->setPath($this->payload->path);
 
 		$taskFn = static function (Payload $payload, HTTPClient $manticoreClient): TaskResult {
-			if ($payload->table === 'information_schema.files' || $payload->table === 'information_schema.triggers') {
+			if ($payload->table === 'information_schema.files' || $payload->table === 'information_schema.triggers' || $payload->table === 'information_schema.column_statistics') {
 				return $payload->getTaskResult();
 			}
 
