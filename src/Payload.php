@@ -21,13 +21,17 @@ final class Payload extends BasePayload {
 		'information_schema.files',
 		'information_schema.tables',
 		'information_schema.triggers',
-		'information_schema.column_statistics'
+		'information_schema.column_statistics',
 	];
 
+	/** @var string */
+	public string $originalQuery;
+
+	/** @var string */
 	public string $path;
 
 	/** @var string */
-	public string $table;
+	public string $table = '';
 
 	/** @var array<string> */
 	public array $fields = [];
@@ -46,34 +50,46 @@ final class Payload extends BasePayload {
 	public static function fromRequest(Request $request): static {
 		$self = new static();
 		$self->path = $request->path;
+		$self->originalQuery = $request->payload;
 
 		// Match fields
 		preg_match(
-			'/^SELECT\s+(.*?)\s+FROM\s+([a-z][a-z\_\-0-9]*(\.[a-z][a-z\_\-0-9]*)?)/i',
+			'/^SELECT\s+(?:(.*?)\s+FROM\s+([a-z][a-z\_\-0-9]*(\.[a-z][a-z\_\-0-9]*)?)|(version\(\)))/i',
 			$request->payload,
 			$matches
 		);
-		$self->table = strtolower($matches[2]);
-		preg_match_all('/(\w+)/i', $matches[1], $matches);
-		$self->fields = $matches[1];
 
-		// Match WHERE statements
-		$matches = [];
-		preg_match_all("/([a-zA-Z0-9_]+)\s*(=|<|>|LIKE)\s*(?:'([^']+)'|([0-9]+))/", $request->payload, $matches);
-		foreach ($matches[1] as $i => $column) {
-			$operator = $matches[2][$i];
-			$value = $matches[3][$i] !== '' ? $matches[3][$i] : $matches[4][$i];
-			$self->where[(string)$column] = [
-				'operator' => (string)$operator,
-				'value' => (string)$value,
-			];
+		// At this point we have two cases: when we have table and when we direct select some function like
+		// select version()
+		// we put this function in fields and table will be empty
+		// otherwise it's normal select with fields and table required
+		if ($matches[2]) {
+			$self->table = strtolower($matches[2]);
+
+			preg_match_all('/([^,]+)/i', $matches[1], $matches);
+			$self->fields = array_map('trim', $matches[1]);
+
+			// Match WHERE statements
+			$matches = [];
+			preg_match_all("/([a-zA-Z0-9_]+)\s*(=|<|>|LIKE)\s*(?:'([^']+)'|([0-9]+))/", $request->payload, $matches);
+			foreach ($matches[1] as $i => $column) {
+				$operator = $matches[2][$i];
+				$value = $matches[3][$i] !== '' ? $matches[3][$i] : $matches[4][$i];
+				$self->where[(string)$column] = [
+					'operator' => (string)$operator,
+					'value' => (string)$value,
+				];
+			}
+
+			// Check that we hit tables that we support otherwise return standard error
+			// To proxy original one
+			if (!in_array($self->table, static::HANDLED_TABLES)) {
+				throw QueryParseError::create('Failed to handle your select query', true);
+			}
+		} else {
+			$self->fields[] = $matches[4];
 		}
 
-		// Check that we hit tables that we support otherwise return standard error
-		// To proxy original one
-		if (!in_array($self->table, static::HANDLED_TABLES)) {
-			throw QueryParseError::create('Failed to handle your select query', true);
-		}
 		return $self;
 	}
 
@@ -103,6 +119,15 @@ final class Payload extends BasePayload {
 				if (stripos($request->payload, $table) !== false) {
 					return true;
 				}
+			}
+
+			if (stripos($request->payload, '`Manticore`.') > 0) {
+				return true;
+			}
+
+			// Check supported functions in select
+			if (stripos($request->payload, 'select version()') === 0) {
+				return true;
 			}
 		}
 		return false;

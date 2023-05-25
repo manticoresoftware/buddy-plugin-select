@@ -10,8 +10,10 @@
 */
 namespace Manticoresearch\Buddy\Plugin\Select;
 
+use Exception;
 use Manticoresearch\Buddy\Core\ManticoreSearch\Client as HTTPClient;
 use Manticoresearch\Buddy\Core\Plugin\BaseHandler;
+use Manticoresearch\Buddy\Core\Task\Column;
 use Manticoresearch\Buddy\Core\Task\Task;
 use Manticoresearch\Buddy\Core\Task\TaskResult;
 use RuntimeException;
@@ -46,39 +48,33 @@ final class Handler extends BaseHandler {
 		$this->manticoreClient->setPath($this->payload->path);
 
 		$taskFn = static function (Payload $payload, HTTPClient $manticoreClient): TaskResult {
-			if ($payload->table === 'information_schema.files' || $payload->table === 'information_schema.triggers' || $payload->table === 'information_schema.column_statistics') {
+			// 0. Select that has database
+			if (stripos($payload->originalQuery, '`Manticore`.') > 0) {
+				$query = str_replace('`Manticore`.', '', $payload->originalQuery);
+				$queryResult = $manticoreClient->sendRequest($query)->getResult();
+				return TaskResult::raw($queryResult);
+			}
+
+			// 1. Handle empty table case first
+			if (!$payload->table) {
+				return static::handleMethods($manticoreClient, $payload);
+			}
+
+			// 2. Other cases with normal select * from [table]
+			if ($payload->table === 'information_schema.files'
+				|| $payload->table === 'information_schema.triggers'
+				|| $payload->table === 'information_schema.column_statistics'
+			) {
 				return $payload->getTaskResult();
 			}
 
-			// TODO: maybe later we will implement multiple tables handle
-			$table = $payload->where['table_name']['value'];
-			$query = "SHOW CREATE TABLE {$table}";
-			/** @var array<array{data:array<array<string,string>>}> */
-			$schemaResult = $manticoreClient->sendRequest($query)->getResult();
-			$createTable = $schemaResult[0]['data'][0]['Create Table'] ?? '';
-
-			$result = $payload->getTaskResult();
-			$data = [];
-			if ($createTable) {
-				$createTables = [$createTable];
-				$i = 0;
-				foreach ($createTables as $createTable) {
-					$row = static::parseTableSchema($createTable);
-					$data[$i] = [];
-					foreach ($payload->fields as $field) {
-						[$type, $value] = static::FIELD_MAP[$field] ?? ['field', $field];
-						$data[$i][$field] = match ($type) {
-							'field' => $row[$value],
-							'table' => $table,
-							'static' => $value,
-							// default => $row[$field] ?? null,
-						};
-					}
-					++$i;
-				}
+			// 3. Handle select count(*) from information_schema.tables
+			if (sizeof($payload->fields) === 1 && stripos($payload->fields[0], 'count(*)') === 0) {
+				return static::handleFieldCount($manticoreClient, $payload);
 			}
 
-			return $result->data($data);
+			// 4. Simple select
+			return static::handleSelectFromTables($manticoreClient, $payload);
 		};
 
 		return Task::createInRuntime(
@@ -119,5 +115,74 @@ final class Handler extends BaseHandler {
 		}
 
 		return $row;
+	}
+
+	/**
+	 * @param HTTPClient $manticoreClient
+	 * @param Payload $payload
+	 * @return TaskResult
+	 */
+	protected static function handleMethods(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+		[$method] = $payload->fields;
+		[$query, $field] = match (strtolower($method)) {
+			'version()' => ["show status like 'mysql_version'", 'Value'],
+			default => throw new Exception("Unsupported method called: $method"),
+		};
+
+		/** @var array{0:array{data:array{0:array{Databases:string,Value:string}}}} */
+		$queryResult = $manticoreClient->sendRequest($query)->getResult();
+		return $payload->getTaskResult()->row(['Value' => $queryResult[0]['data'][0][$field]]);
+	}
+
+	/**
+	 * @param HTTPClient $manticoreClient
+	 * @param Payload $payload
+	 * @return TaskResult
+	 */
+	protected static function handleFieldCount(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+		$table = $payload->where['table_name']['value'];
+		$query = "DESC {$table}";
+		/** @var array{0:array{data:array<mixed>}} */
+		$descResult = $manticoreClient->sendRequest($query)->getResult();
+		$count = sizeof($descResult[0]['data']);
+		return TaskResult::withRow(['COUNT(*)' => $count])
+			->column('COUNT(*)', Column::String);
+	}
+
+	/**
+	 * @param HTTPClient $manticoreClient
+	 * @param Payload $payload
+	 * @return TaskResult
+	 */
+	protected static function handleSelectFromTables(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+		$table = $payload->where['table_name']['value'];
+
+		$query = "SHOW CREATE TABLE {$table}";
+			/** @var array<array{data:array<array<string,string>>}> */
+			$schemaResult = $manticoreClient->sendRequest($query)->getResult();
+			$createTable = $schemaResult[0]['data'][0]['Create Table'] ?? '';
+
+			$result = $payload->getTaskResult();
+			$data = [];
+		if ($createTable) {
+			$createTables = [$createTable];
+			$i = 0;
+			foreach ($createTables as $createTable) {
+				$row = static::parseTableSchema($createTable);
+				$data[$i] = [];
+				foreach ($payload->fields as $field) {
+					[$type, $value] = static::FIELD_MAP[$field] ?? ['field', $field];
+					$data[$i][$field] = match ($type) {
+						'field' => $row[$value],
+						'table' => $table,
+						'static' => $value,
+						// default => $row[$field] ?? null,
+					};
+				}
+				++$i;
+			}
+		}
+
+			return $result->data($data);
 	}
 }
