@@ -22,6 +22,7 @@ final class Payload extends BasePayload {
 		'information_schema.tables',
 		'information_schema.triggers',
 		'information_schema.column_statistics',
+		'information_schema.columns',
 	];
 
 	/** @var string */

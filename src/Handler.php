@@ -20,10 +20,17 @@ use RuntimeException;
 use parallel\Runtime;
 
 final class Handler extends BaseHandler {
-	const FIELD_MAP = [
+	const TABLES_FIELD_MAP = [
 		'engine' => ['field', 'engine'],
 		'table_type' => ['static', 'BASE TABLE'],
 		'table_name' => ['table', ''],
+	];
+
+	const COLUMNS_FIELD_MAP = [
+		'extra' => ['static', ''],
+		'generation_expression' => ['static', ''],
+		'column_name' => ['field', 'Field'],
+		'data_type' => ['field', 'Type'],
 	];
 
   /** @var HTTPClient $manticoreClient */
@@ -73,7 +80,12 @@ final class Handler extends BaseHandler {
 				return static::handleFieldCount($manticoreClient, $payload);
 			}
 
-			// 4. Simple select
+			// 4. Select from columns
+			if ($payload->table === 'information_schema.columns') {
+				return static::handleSelectFromColumns($manticoreClient, $payload);
+			}
+
+			// 5. Select from tables
 			return static::handleSelectFromTables($manticoreClient, $payload);
 		};
 
@@ -158,12 +170,12 @@ final class Handler extends BaseHandler {
 		$table = $payload->where['table_name']['value'];
 
 		$query = "SHOW CREATE TABLE {$table}";
-			/** @var array<array{data:array<array<string,string>>}> */
-			$schemaResult = $manticoreClient->sendRequest($query)->getResult();
-			$createTable = $schemaResult[0]['data'][0]['Create Table'] ?? '';
+		/** @var array<array{data:array<array<string,string>>}> */
+		$schemaResult = $manticoreClient->sendRequest($query)->getResult();
+		$createTable = $schemaResult[0]['data'][0]['Create Table'] ?? '';
 
-			$result = $payload->getTaskResult();
-			$data = [];
+		$result = $payload->getTaskResult();
+		$data = [];
 		if ($createTable) {
 			$createTables = [$createTable];
 			$i = 0;
@@ -171,7 +183,7 @@ final class Handler extends BaseHandler {
 				$row = static::parseTableSchema($createTable);
 				$data[$i] = [];
 				foreach ($payload->fields as $field) {
-					[$type, $value] = static::FIELD_MAP[$field] ?? ['field', $field];
+					[$type, $value] = static::TABLES_FIELD_MAP[$field] ?? ['field', $field];
 					$data[$i][$field] = match ($type) {
 						'field' => $row[$value],
 						'table' => $table,
@@ -183,6 +195,36 @@ final class Handler extends BaseHandler {
 			}
 		}
 
-			return $result->data($data);
+		return $result->data($data);
+	}
+
+	/**
+	 * @param HTTPClient $manticoreClient
+	 * @param Payload $payload
+	 * @return TaskResult
+	 */
+	protected static function handleSelectFromColumns(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+		$table = $payload->where['table_name']['value'];
+
+		$query = "DESC {$table}";
+		/** @var array<array{data:array<array<string,string>>}> */
+		$descResult = $manticoreClient->sendRequest($query)->getResult();
+
+		$data = [];
+		$i = 0;
+		foreach ($descResult[0]['data'] as $row) {
+			$data[$i] = [];
+			foreach ($payload->fields as $field) {
+				[$type, $value] = static::COLUMNS_FIELD_MAP[$field] ?? ['field', $field];
+				$data[$i][$field] = match ($type) {
+					'field' => $row[$value],
+					'static' => $value,
+					// default => $row[$field] ?? null,
+				};
+			}
+			++$i;
+		}
+		$result = $payload->getTaskResult();
+		return $result->data($data);
 	}
 }
