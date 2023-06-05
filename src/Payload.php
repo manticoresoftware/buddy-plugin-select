@@ -64,7 +64,7 @@ final class Payload extends BasePayload {
 		// select version()
 		// we put this function in fields and table will be empty
 		// otherwise it's normal select with fields and table required
-		if (isset($matches[2])) {
+		if ($matches[2] ?? null) {
 			$self->table = strtolower($matches[2]);
 			preg_match_all('/([^,]+)/i', $matches[1], $matches);
 			$self->fields = array_map('trim', $matches[1]);
