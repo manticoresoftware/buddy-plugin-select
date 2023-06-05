@@ -53,13 +53,16 @@ final class Handler extends BaseHandler {
 	 */
 	public function run(Runtime $runtime): Task {
 		$this->manticoreClient->setPath($this->payload->path);
-
 		$taskFn = static function (Payload $payload, HTTPClient $manticoreClient): TaskResult {
+			if (preg_match('/COUNT\([^*\)]+\)/ius', $payload->originalQuery)) {
+				return static::handleSelectCountOnField($manticoreClient, $payload);
+			}
+
 			// 0. Select that has database
-			if (stripos($payload->originalQuery, '`Manticore`.') > 0) {
-				$query = str_replace('`Manticore`.', '', $payload->originalQuery);
-				$queryResult = $manticoreClient->sendRequest($query)->getResult();
-				return TaskResult::raw($queryResult);
+			if (stripos($payload->originalQuery, '`Manticore`.') > 0
+				|| stripos($payload->originalQuery, 'Manticore.') > 0
+			) {
+				return static::handleSelectDatabasePrefixed($manticoreClient, $payload);
 			}
 
 			// 1. Handle empty table case first
@@ -68,25 +71,26 @@ final class Handler extends BaseHandler {
 			}
 
 			// 2. Other cases with normal select * from [table]
-			if ($payload->table === 'information_schema.files'
-				|| $payload->table === 'information_schema.triggers'
-				|| $payload->table === 'information_schema.column_statistics'
+			if (stripos(
+				'information_schema.files|information_schema.triggers|information_schema.column_statistics',
+				$payload->table
+			) !== false
 			) {
 				return $payload->getTaskResult();
 			}
 
-			// 3. Handle select count(*) from information_schema.tables
-			if (sizeof($payload->fields) === 1 && stripos($payload->fields[0], 'count(*)') === 0) {
-				return static::handleFieldCount($manticoreClient, $payload);
-			}
-
-			// 4. Select from columns
+			// 3. Select from columns
 			if ($payload->table === 'information_schema.columns') {
 				return static::handleSelectFromColumns($manticoreClient, $payload);
 			}
 
-			// 5. Select from tables
-			return static::handleSelectFromTables($manticoreClient, $payload);
+			// 4. Handle select fields or count(*) from information_schema.tables
+			if ($payload->table === 'information_schema.tables') {
+				return static::handleSelectFromTables($manticoreClient, $payload);
+			}
+
+			// 5. Select from existing table while pasing string as a numeric
+			return static::handleSelectFromExistingTable($manticoreClient, $payload);
 		};
 
 		return Task::createInRuntime(
@@ -167,35 +171,71 @@ final class Handler extends BaseHandler {
 	 * @return TaskResult
 	 */
 	protected static function handleSelectFromTables(HTTPClient $manticoreClient, Payload $payload): TaskResult {
-		$table = $payload->where['table_name']['value'];
+		if (sizeof($payload->fields) === 1 && stripos($payload->fields[0], 'count(*)') === 0) {
+			return static::handleFieldCount($manticoreClient, $payload);
+		}
 
-		$query = "SHOW CREATE TABLE {$table}";
-		/** @var array<array{data:array<array<string,string>>}> */
-		$schemaResult = $manticoreClient->sendRequest($query)->getResult();
-		$createTable = $schemaResult[0]['data'][0]['Create Table'] ?? '';
+		$table = $payload->where['table_name']['value'] ?? null;
+		$data = [];
+		if ($table) {
+			$query = "SHOW CREATE TABLE {$table}";
+			/** @var array<array{data:array<array<string,string>>}> */
+			$schemaResult = $manticoreClient->sendRequest($query)->getResult();
+			$createTable = $schemaResult[0]['data'][0]['Create Table'] ?? '';
+
+			if ($createTable) {
+				$createTables = [$createTable];
+				$i = 0;
+				foreach ($createTables as $createTable) {
+					$row = static::parseTableSchema($createTable);
+					$data[$i] = [];
+					foreach ($payload->fields as $field) {
+						[$type, $value] = static::TABLES_FIELD_MAP[$field] ?? ['field', $field];
+						$data[$i][$field] = match ($type) {
+							'field' => $row[$value],
+							'table' => $table,
+							'static' => $value,
+							// default => $row[$field] ?? null,
+						};
+					}
+					++$i;
+				}
+			}
+		} else {
+			$data = static::processSelectOtherFromFromTables($manticoreClient, $payload);
+		}
 
 		$result = $payload->getTaskResult();
+		return $result->data($data);
+	}
+
+	/**
+	 * @param HTTPClient $manticoreClient
+	 * @param Payload $payload
+	 * @return array<array<string,string>>
+	 */
+	protected static function processSelectOtherFromFromTables(HTTPClient $manticoreClient, Payload $payload): array {
 		$data = [];
-		if ($createTable) {
-			$createTables = [$createTable];
-			$i = 0;
-			foreach ($createTables as $createTable) {
-				$row = static::parseTableSchema($createTable);
-				$data[$i] = [];
-				foreach ($payload->fields as $field) {
-					[$type, $value] = static::TABLES_FIELD_MAP[$field] ?? ['field', $field];
-					$data[$i][$field] = match ($type) {
-						'field' => $row[$value],
-						'table' => $table,
-						'static' => $value,
-						// default => $row[$field] ?? null,
-					};
-				}
-				++$i;
+		// grafana: SELECT DISTINCT TABLE_SCHEMA from information_schema.TABLES
+		// where TABLE_TYPE != 'SYSTEM VIEW' ORDER BY TABLE_SCHEMA
+		if (sizeof($payload->fields) === 1
+			&& stripos($payload->fields[0], 'table_schema') !== false
+		) {
+			$data[] = [
+				'TABLE_SCHEMA' => 'Manticore',
+			];
+		} elseif (sizeof($payload->fields) === 1 && stripos($payload->fields[0], 'table_name') !== false) {
+			$query = 'SHOW TABLES';
+			/** @var array<array{data:array<array<string,string>>}> */
+			$tablesResult = $manticoreClient->sendRequest($query)->getResult();
+			foreach ($tablesResult[0]['data'] as $row) {
+				$data[] = [
+					'TABLE_NAME' => $row['Index'],
+				];
 			}
 		}
 
-		return $result->data($data);
+		return $data;
 	}
 
 	/**
@@ -226,5 +266,185 @@ final class Handler extends BaseHandler {
 		}
 		$result = $payload->getTaskResult();
 		return $result->data($data);
+	}
+
+
+	/**
+	 * @param HTTPClient $manticoreClient
+	 * @param Payload $payload
+	 * @return TaskResult
+	 */
+	protected static function handleSelectFromExistingTable(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+		$table = str_ireplace(
+			['`Manticore`.', 'Manticore.'],
+			'',
+			$payload->table
+		);
+		$selectQuery = str_ireplace(
+			['`Manticore`.', 'Manticore.'],
+			'',
+			$payload->originalQuery
+		);
+		$selectQuery = preg_replace_callback(
+			'/COALESCE\(([a-z@][a-z0-9_@]*),\s*\'\'\)\s*(<>|=[^>])\s*\'\'|'
+				. 'CONTAINS\(([a-z@][a-z0-9_@]*), \'NEAR\(\((\w+), (\w+)\), (\d+)\)\'\)/ius',
+			function ($matches) {
+				if (isset($matches[1])) {
+					return $matches[1] . ' ' . $matches[2] . ' \'\'';
+				}
+
+				return 'MATCH(\'' . $matches[4]
+					. ' NEAR/' . $matches[6]
+					. ' ' . $matches[5] . '\')';
+			},
+			$selectQuery
+		);
+		if (!$selectQuery) {
+			throw new Exception('Failed to parse coalesce or contains from the query');
+		}
+
+		$query = "DESC {$table}";
+		/** @var array<array{data:array<array<string,string>>}> */
+		$descResult = $manticoreClient->sendRequest($query)->getResult();
+
+		$isLikeOp = false;
+		foreach ($descResult[0]['data'] as $row) {
+			// Skip missing where statements
+			if (!isset($payload->where[$row['Field']])) {
+				continue;
+			}
+
+			$field = $row['Field'];
+			$operator = $payload->where[$field]['operator'];
+			$value = $payload->where[$field]['value'];
+			$isInOp = str_contains($operator, 'IN');
+			$isLikeOp = str_contains($operator, 'LIKE');
+
+			$regexFn = static function ($field, $value) {
+				return "REGEX($field, '^" . str_replace(
+					'%',
+					'.*',
+					$value
+				) . "$')";
+			};
+
+			$isNot = str_starts_with($operator, 'NOT');
+			$selectQuery = match ($row['Type']) {
+				'bigint', 'int', 'uint' => str_replace(
+					match (true) {
+						$isInOp => "{$field} {$operator} ('{$value}')",
+						default => "{$field} {$operator} '{$value}'",
+					},
+					match (true) {
+						$isInOp => "{$field} {$operator} '{$value}'",
+					default => "{$field} {$operator} {$value}",
+					},
+					$selectQuery
+				),
+				'json', 'string' => str_replace(
+					"{$field} {$operator} '{$value}'",
+					match (true) {
+						$isLikeOp => "{$field}__regex = " . ($isNot ? '0' : '1'),
+					default => "{$field} {$operator} '{$value}'",
+					},
+
+					$isLikeOp ? str_ireplace(
+						'select ',
+						'select ' . $regexFn($field, $value) . ' AS ' . $field . '__regex,',
+						$selectQuery
+					) : $selectQuery
+				),
+				default => $selectQuery,
+			};
+		}
+
+		/** @var array{0:array{columns:array<array<string,mixed>>,data:array<array<string,string>>}} */
+		$result = $manticoreClient->sendRequest($selectQuery)->getResult();
+		if ($isLikeOp) {
+			$result = static::filterRegexFieldsFromResult($result);
+		}
+		return TaskResult::raw($result);
+	}
+
+
+	/**
+	 * @param HTTPClient $manticoreClient
+	 * @param Payload $payload
+	 * @return TaskResult
+	 */
+	protected static function handleSelectCountOnField(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+		$selectQuery = str_ireplace(
+			['`Manticore`.', 'Manticore.'],
+			'',
+			$payload->originalQuery
+		);
+
+		$pattern = '/COUNT\((?! *\* *\))(\w+)\)/ius';
+		$replacement = 'COUNT(*)';
+		$query = preg_replace($pattern, $replacement, $selectQuery);
+		if (!$query) {
+			throw new Exception('Failed to fix query');
+		}
+		/** @var array<array{data:array<array<string,string>>}> */
+		$selectResult = $manticoreClient->sendRequest($query)->getResult();
+		return TaskResult::raw($selectResult);
+	}
+
+	/**
+	 * @param HTTPClient $manticoreClient
+	 * @param Payload $payload
+	 * @return TaskResult
+	 */
+	protected static function handleSelectDatabasePrefixed(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+		$query = str_ireplace(
+			['`Manticore`.', 'Manticore.'],
+			'',
+			$payload->originalQuery
+		);
+
+		/** @var array{error?:string} $queryResult */
+		$queryResult = $manticoreClient->sendRequest($query)->getResult();
+		if (isset($queryResult['error'])) {
+			$errors = [
+				"unsupported filter type 'string' on attribute",
+				"unsupported filter type 'stringlist' on attribute",
+				'unexpected LIKE',
+				"unexpected '(' near '(",
+			];
+
+			foreach ($errors as $error) {
+				if (str_contains($queryResult['error'], $error)) {
+					return static::handleSelectFromExistingTable($manticoreClient, $payload);
+				}
+			}
+		}
+
+		return TaskResult::raw($queryResult);
+	}
+
+	/**
+	 * @param array{0:array{columns:array<array<string,mixed>>,data:array<array<string,string>>}} $result
+	 * @return array{0:array{columns:array<array<string,mixed>>,data:array<array<string,string>>}}
+	 */
+	protected static function filterRegexFieldsFromResult(array $result): array {
+		$result[0]['columns'] = array_filter(
+			$result[0]['columns'],
+			fn($v) => !str_ends_with(array_key_first($v) ?? '', '__regex')
+		);
+		$result[0]['data'] = array_map(
+			function ($row) {
+				foreach (array_keys($row) as $key) {
+					if (!str_ends_with($key, '__regex')) {
+						continue;
+					}
+
+					unset($row[$key]);
+				}
+
+				return $row;
+			}, $result[0]['data']
+		);
+
+		return $result;
 	}
 }
