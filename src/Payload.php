@@ -64,15 +64,17 @@ final class Payload extends BasePayload {
 		// select version()
 		// we put this function in fields and table will be empty
 		// otherwise it's normal select with fields and table required
-		if ($matches[2]) {
+		if (isset($matches[2])) {
 			$self->table = strtolower($matches[2]);
-
 			preg_match_all('/([^,]+)/i', $matches[1], $matches);
 			$self->fields = array_map('trim', $matches[1]);
 
 			// Match WHERE statements
 			$matches = [];
-			preg_match_all("/([a-zA-Z0-9_]+)\s*(=|<|>|LIKE)\s*(?:'([^']+)'|([0-9]+))/", $request->payload, $matches);
+			$pattern = '/([a-zA-Z0-9_]+)\s*(=|<|>|!=|<>|'
+				. 'NOT LIKE|LIKE|NOT IN|IN)'
+				. "\s*(?:\('([^']+)'\)|'([^']+)'|([0-9]+))/";
+			preg_match_all($pattern, $request->payload, $matches);
 			foreach ($matches[1] as $i => $column) {
 				$operator = $matches[2][$i];
 				$value = $matches[3][$i] !== '' ? $matches[3][$i] : $matches[4][$i];
@@ -84,7 +86,10 @@ final class Payload extends BasePayload {
 
 			// Check that we hit tables that we support otherwise return standard error
 			// To proxy original one
-			if (!in_array($self->table, static::HANDLED_TABLES)) {
+			if (!str_contains($request->error, "unsupported filter type 'string' on attribute")
+				&& !in_array($self->table, static::HANDLED_TABLES)
+				&& !str_starts_with($self->table, 'manticore')
+			) {
 				throw QueryParseError::create('Failed to handle your select query', true);
 			}
 		} else {
@@ -122,15 +127,50 @@ final class Payload extends BasePayload {
 				}
 			}
 
-			if (stripos($request->payload, '`Manticore`.') > 0) {
+			if (preg_match('/(`?Manticore`?|^select\s+version\(\))/ius', $request->payload)) {
 				return true;
 			}
 
-			// Check supported functions in select
-			if (stripos($request->payload, 'select version()') === 0) {
+			if (static::matchError($request)) {
 				return true;
 			}
 		}
+		return false;
+	}
+
+	/**
+	 * @param Request $request
+	 * @return bool
+	 */
+	public static function matchError(Request $request): bool {
+		if (str_contains($request->error, "unsupported filter type 'string' on attribute")) {
+			return true;
+		}
+
+		if (str_contains($request->error, "syntax error, unexpected identifier, expecting DISTINCT or '*' near")) {
+			return true;
+		}
+
+		if (str_contains($request->error, "unsupported filter type 'stringlist' on attribute")) {
+			return true;
+		}
+
+		if (str_contains($request->error, 'unexpected LIKE')) {
+			return true;
+		}
+
+		if (str_contains($request->error, "unexpected '(' near '(")
+			&& stripos($request->payload, 'coalesce') !== false
+		) {
+			return true;
+		}
+
+		if (str_contains($request->error, "unexpected '(' near '(")
+			&& stripos($request->payload, 'contains') !== false
+		) {
+			return true;
+		}
+
 		return false;
 	}
 }
