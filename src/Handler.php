@@ -402,9 +402,18 @@ final class Handler extends BaseHandler {
 			$payload->originalQuery
 		);
 
+		// Replace all as `Sum(...)` or kind of to something that is supported by Manticore
+		$pattern = '/(?<=\s`)[^`]+(?=`)/i';
+		$query = preg_replace_callback(
+			$pattern, function ($matches) {
+				return strtolower(preg_replace('/[^a-zA-Z0-9_]/', '', $matches[0]) ?? '');
+			}, $query
+		) ?? $query;
+
 		/** @var array{error?:string} $queryResult */
 		$queryResult = $manticoreClient->sendRequest($query)->getResult();
 		if (isset($queryResult['error'])) {
+			$payload->originalQuery = $query;
 			$errors = [
 				"unsupported filter type 'string' on attribute",
 				"unsupported filter type 'stringlist' on attribute",
