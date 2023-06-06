@@ -51,12 +51,12 @@ final class Payload extends BasePayload {
 	public static function fromRequest(Request $request): static {
 		$self = new static();
 		$self->path = $request->path;
-		$self->originalQuery = $request->payload;
+		$self->originalQuery = str_replace("\n", ' ', $request->payload);
 
 		// Match fields
 		preg_match(
-			'/^SELECT\s+(?:(.*?)\s+FROM\s+([a-z][a-z\_\-0-9]*(\.[a-z][a-z\_\-0-9]*)?)|(version\(\)))/i',
-			$request->payload,
+			'/^SELECT\s+(?:(.*?)\s+FROM\s+(`?[a-z][a-z\_\-0-9]*`?(\.[a-z][a-z\_\-0-9]*)?)|(version\(\)))/is',
+			$self->originalQuery,
 			$matches
 		);
 
@@ -65,13 +65,14 @@ final class Payload extends BasePayload {
 		// we put this function in fields and table will be empty
 		// otherwise it's normal select with fields and table required
 		if ($matches[2] ?? null) {
-			$self->table = strtolower($matches[2]);
-			preg_match_all('/([^,]+)/i', $matches[1], $matches);
-			$self->fields = array_map('trim', $matches[1]);
+			$self->table = str_replace('`manticore`.', 'manticore.', strtolower(ltrim($matches[2], '.')));
+			$pattern = '/(?:[^,(]+|(\((?>[^()]+|(?1))*\)))+/';
+			preg_match_all($pattern, $matches[1], $matches);
+			$self->fields = array_map('trim', $matches[0]);
 
 			// Match WHERE statements
 			$matches = [];
-			$pattern = '/([a-zA-Z0-9_]+)\s*(=|<|>|!=|<>|'
+			$pattern = '/([@a-zA-Z0-9_]+)\s*(=|<|>|!=|<>|'
 				. 'NOT LIKE|LIKE|NOT IN|IN)'
 				. "\s*(?:\('([^']+)'\)|'([^']+)'|([0-9]+))/";
 			preg_match_all($pattern, $request->payload, $matches);
@@ -168,6 +169,12 @@ final class Payload extends BasePayload {
 		if (str_contains($request->error, "unexpected '(' near '(")
 			&& stripos($request->payload, 'contains') !== false
 		) {
+			return true;
+		}
+
+		if (str_contains($request->error, "unexpected identifier, expecting ',' or ')' near")
+			&& (stripos($request->payload, 'date(') !== false
+			|| stripos($request->payload, 'quarter') !== false)) {
 			return true;
 		}
 

@@ -410,6 +410,101 @@ final class Handler extends BaseHandler {
 			}, $query
 		) ?? $query;
 
+		// Replace date grains if presented
+		if (stripos($query, 'date(') !== false || stripos($query, 'quarter') !== false) {
+			$fieldPattern = '[@a-zA-Z0-9_]+';
+			$patterns = [
+				/* second */
+				"/DATE_ADD\(DATE\(($fieldPattern)\),\s+INTERVAL\s+\(HOUR\(($fieldPattern)\)\s*\*\s*60\s*\*\s*60\s+\+"
+				. "MINUTE\(($fieldPattern)\)\s*\*\s*60\s*\+\s*"
+				. "SECOND\(($fieldPattern)\)\)\s+SECOND\)\s+AS\s+$fieldPattern/",
+
+				"/DATE_ADD\(DATE\(($fieldPattern)\),\s+INTERVAL\s+\(HOUR\(($fieldPattern)\)\s*\*\s*60\s*\*\s*60\s+\+"
+				. "MINUTE\(($fieldPattern)\)\s*\*\s*60\s*\+\s*SECOND\(($fieldPattern)\)\)\s+SECOND\)/",
+
+				/* minute */
+				"/DATE_ADD\(DATE\(($fieldPattern)\),\s+INTERVAL\s+\(HOUR\(($fieldPattern)\)\s*\*\s*60\s+\+"
+				. "MINUTE\(($fieldPattern)\)\)\s+MINUTE\)\s+AS\s+$fieldPattern/",
+
+				"/DATE_ADD\(DATE\(($fieldPattern)\),\s+INTERVAL\s+\(HOUR\(($fieldPattern)\)\s*\*\s*60\s*\*\s*60\s+\+"
+				. "MINUTE\(($fieldPattern)\)\s*\*\s*60\s*\+\s*SECOND\(($fieldPattern)\)\)\s+SECOND\)/",
+
+				/* hour */
+				"/DATE_ADD\(DATE\(($fieldPattern)\),\s+INTERVAL\s+HOUR\(($fieldPattern)\)\s+HOUR\)"
+				. "\s+AS\s+$fieldPattern/",
+				"/DATE_ADD\(DATE\(($fieldPattern)\),\s+INTERVAL\s+HOUR\(($fieldPattern)\)\s+HOUR\)/",
+
+				/* day */
+				"/DATE\(($fieldPattern)\)\s+AS\s+$fieldPattern/",
+				"/DATE\(($fieldPattern)\)/",
+
+				// /* week */
+				// "/DATE\(DATE_SUB\(($fieldPattern),\s+INTERVAL\s+DAYOFWEEK\(($fieldPattern)\)"
+				// . "\s*-\s*1\s+DAY\)\)\s+AS\s+" .
+				// "$fieldPattern/",
+
+				// "/DATE\(DATE_SUB\(($fieldPattern),\s+INTERVAL\s+DAYOFWEEK\(($fieldPattern)\)\s*-\s*1\s+DAY\)\)/",
+
+				// /* week on monday */
+				// "/DATE\(DATE_SUB\(($fieldPattern),\s+INTERVAL\s+DAYOFWEEK\(DATE_SUB\((" .
+				// "$fieldPattern),\s+INTERVAL\s+1\s+DAY\)\)\s*-\s*1\s+DAY\)\)\s+AS\s+$fieldPattern/",
+
+				// "/DATE\(DATE_SUB\(($fieldPattern),\s+INTERVAL\s+DAYOFWEEK\(DATE_SUB\((" .
+				// "$fieldPattern),\s+INTERVAL\s+1\s+DAY\)\)\s*-\s*1\s+DAY\)\)/",
+
+				/* month */
+				"/DATE\(DATE_SUB\(($fieldPattern),\s+INTERVAL\s+DAYOFMONTH\(("
+				. "$fieldPattern)\)\s*-\s*1\s+DAY\)\)\s+AS\s+$fieldPattern/",
+
+				"/DATE\(DATE_SUB\(($fieldPattern),\s+INTERVAL\s+DAYOFMONTH\(("
+				. "$fieldPattern)\)\s*-\s*1\s+DAY\)\)/",
+
+				// /* quarter */
+				// "/QUARTER\(($fieldPattern)\)\s+QUARTER\s*-\s*INTERVAL\s+1\s+QUARTER\s+AS\s+$fieldPattern/",
+				// "/QUARTER\(($fieldPattern)\)\s+QUARTER\s*-\s*INTERVAL\s+1\s+QUARTER/",
+
+				/* year */
+				"/DATE\(DATE_SUB\(($fieldPattern),\s+INTERVAL\s+DAYOFYEAR\(("
+				. "$fieldPattern)\)\s*-\s*1\s+DAY\)\)\s+AS\s+$fieldPattern/",
+
+				"/DATE\(DATE_SUB\(($fieldPattern),\s+INTERVAL\s+DAYOFYEAR\(("
+				. "$fieldPattern)\)\s*-\s*1\s+DAY\)\)/",
+			];
+
+			$replacements = [
+				/* second */
+				"DATE_FORMAT($1, '%Y-%m-%d %T') AS $1",
+				'$1',
+				/* minute */
+				"DATE_FORMAT($1, '%Y-%m-%d %H:%M') AS $1",
+				'$1',
+				/* hour */
+				"DATE_FORMAT($1, '%Y-%m-%d %H') AS $1",
+				'$1',
+				/* day */
+				"DATE_FORMAT($1, '%Y-%m-%d') AS $1",
+				'$1',
+				// /* week */
+				// "DATE_FORMAT($1, '%Y-%U') AS $1",
+				// "$1",
+				// /* week on monday */
+				// "DATE_FORMAT($1, '%Y-%W') AS $1",
+				// "$1",
+				/* month */
+				"DATE_FORMAT($1, '%Y-%m') AS $1",
+				'$1',
+				// /* quarter */
+				// "DATE_FORMAT($1, '%Y-%m') AS $1",
+				// "$1",
+				/* year */
+				"DATE_FORMAT($1, '%Y') AS $1",
+				'$1',
+			];
+
+			$query = preg_replace($patterns, $replacements, $query) ?? $query;
+			var_dump($query);
+		}
+
 		/** @var array{error?:string} $queryResult */
 		$queryResult = $manticoreClient->sendRequest($query)->getResult();
 		if (isset($queryResult['error'])) {
