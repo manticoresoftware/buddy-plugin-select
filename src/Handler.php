@@ -54,6 +54,10 @@ final class Handler extends BaseHandler {
 	public function run(Runtime $runtime): Task {
 		$this->manticoreClient->setPath($this->payload->path);
 		$taskFn = static function (Payload $payload, HTTPClient $manticoreClient): TaskResult {
+			if ($payload->values) {
+				return static::handleSelectValues($payload);
+			}
+
 			if (preg_match('/COUNT\([^*\)]+\)/ius', $payload->originalQuery)) {
 				return static::handleSelectCountOnField($manticoreClient, $payload);
 			}
@@ -62,6 +66,7 @@ final class Handler extends BaseHandler {
 			if (stripos($payload->originalQuery, '`Manticore`.') > 0
 				|| stripos($payload->originalQuery, 'Manticore.') > 0
 			) {
+				var_dump($payload);
 				return static::handleSelectDatabasePrefixed($manticoreClient, $payload);
 			}
 
@@ -79,18 +84,11 @@ final class Handler extends BaseHandler {
 				return $payload->getTaskResult();
 			}
 
-			// 3. Select from columns
-			if ($payload->table === 'information_schema.columns') {
-				return static::handleSelectFromColumns($manticoreClient, $payload);
-			}
-
-			// 4. Handle select fields or count(*) from information_schema.tables
-			if ($payload->table === 'information_schema.tables') {
-				return static::handleSelectFromTables($manticoreClient, $payload);
-			}
-
-			// 5. Select from existing table while pasing string as a numeric
-			return static::handleSelectFromExistingTable($manticoreClient, $payload);
+			return match ($payload->table) {
+				'information_schema.columns' => static::handleSelectFromColumns($manticoreClient, $payload),
+				'information_schema.tables' => static::handleSelectFromTables($manticoreClient, $payload),
+				default => static::handleSelectFromExistingTable($manticoreClient, $payload),
+			};
 		};
 
 		return Task::createInRuntime(
@@ -502,7 +500,6 @@ final class Handler extends BaseHandler {
 			];
 
 			$query = preg_replace($patterns, $replacements, $query) ?? $query;
-			var_dump($query);
 		}
 
 		/** @var array{error?:string} $queryResult */
@@ -524,6 +521,15 @@ final class Handler extends BaseHandler {
 		}
 
 		return TaskResult::raw($queryResult);
+	}
+
+	/**
+	 * @param Payload $payload
+	 * @return TaskResult
+	 */
+	protected static function handleSelectValues(Payload $payload): TaskResult {
+		return TaskResult::withRow(['Value' => $payload->values[0]])
+			->column('Value', Column::String);
 	}
 
 	/**

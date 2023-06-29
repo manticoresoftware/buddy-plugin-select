@@ -37,6 +37,9 @@ final class Payload extends BasePayload {
 	/** @var array<string> */
 	public array $fields = [];
 
+	/** @var array<string> */
+	public array $values = [];
+
 	/** @var array<string,array{operator:string,value:int|string|bool}> */
 	public array $where = [];
 
@@ -55,7 +58,8 @@ final class Payload extends BasePayload {
 
 		// Match fields
 		preg_match(
-			'/^SELECT\s+(?:(.*?)\s+FROM\s+(`?[a-z][a-z\_\-0-9]*`?(\.[a-z][a-z\_\-0-9]*)?)|(version\(\)))/is',
+			'/^SELECT\s+(?:(.*?)\s+FROM\s+(`?[a-z][a-z\_\-0-9]*`?(\.[a-z][a-z\_\-0-9]*)?)'
+				. '|(version\(\))|(\'[^\']*?\'))/is',
 			$self->originalQuery,
 			$matches
 		);
@@ -94,7 +98,11 @@ final class Payload extends BasePayload {
 				throw QueryParseError::create('Failed to handle your select query', true);
 			}
 		} else {
-			$self->fields[] = $matches[4];
+			if (isset($matches[5])) {
+				$self->values = [trim($matches[5], "'")];
+			} else {
+				$self->fields[] = $matches[4];
+			}
 		}
 
 		return $self;
@@ -175,6 +183,10 @@ final class Payload extends BasePayload {
 		if (str_contains($request->error, "unexpected identifier, expecting ',' or ')' near")
 			&& (stripos($request->payload, 'date(') !== false
 			|| stripos($request->payload, 'quarter') !== false)) {
+			return true;
+		}
+
+		if (str_contains($request->error, 'unexpected end of file')) {
 			return true;
 		}
 
