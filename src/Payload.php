@@ -168,13 +168,13 @@ final class Payload extends BasePayload {
 			return true;
 		}
 
-		if (str_contains($request->error, "unexpected '(' near '(")
+		if (str_contains($request->error, "unexpected '('")
 			&& stripos($request->payload, 'coalesce') !== false
 		) {
 			return true;
 		}
 
-		if (str_contains($request->error, "unexpected '(' near '(")
+		if (str_contains($request->error, "unexpected '('")
 			&& stripos($request->payload, 'contains') !== false
 		) {
 			return true;
@@ -186,7 +186,7 @@ final class Payload extends BasePayload {
 			return true;
 		}
 
-		if (str_contains($request->error, 'unexpected end of file')) {
+		if (str_contains($request->error, 'unexpected $end')) {
 			return true;
 		}
 
