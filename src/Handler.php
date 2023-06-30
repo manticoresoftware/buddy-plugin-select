@@ -509,7 +509,7 @@ final class Handler extends BaseHandler {
 				"unsupported filter type 'string' on attribute",
 				"unsupported filter type 'stringlist' on attribute",
 				'unexpected LIKE',
-				"unexpected '(' near '(",
+				"unexpected '('",
 			];
 
 			foreach ($errors as $error) {
