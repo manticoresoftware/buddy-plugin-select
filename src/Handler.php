@@ -66,7 +66,6 @@ final class Handler extends BaseHandler {
 			if (stripos($payload->originalQuery, '`Manticore`.') > 0
 				|| stripos($payload->originalQuery, 'Manticore.') > 0
 			) {
-				var_dump($payload);
 				return static::handleSelectDatabasePrefixed($manticoreClient, $payload);
 			}
 
