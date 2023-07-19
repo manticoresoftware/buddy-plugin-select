@@ -54,6 +54,7 @@ class UnsupportedStmtHandlerTest extends TestCase {
 			'SELECT DEFAULT_COLLATION_NAME as TEST FROM information_schema.schemata',
 			'SELECT DEFAULT_COLLATION_NAME as TEST FROM `information_schema`.`schemata`',
 			'SELECT `DEFAULT_COLLATION_NAME` as `TEST` FROM information_schema.schemata',
+			'SELECT DEFAULT_COLLATION_NAME as `TEST` FROM INFORMATION_SCHEMA.SCHEMATA',
 		];
 
 		foreach ($testingSet as $query) {

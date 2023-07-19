@@ -68,6 +68,7 @@ final class Payload extends BasePayload {
 		// otherwise it's normal select with fields and table required
 		if ($matches[2] ?? null) {
 			$self->table = str_replace('`', '', strtolower(ltrim($matches[2], '.')));
+			echo 'TEST ' . $self->table . PHP_EOL;
 			$pattern = '/(?:[^,(]+|(\((?>[^()]+|(?1))*\)))+/';
 			preg_match_all($pattern, $matches[1], $matches);
 			$self->fields = array_map('trim', $matches[0]);
@@ -128,7 +129,7 @@ final class Payload extends BasePayload {
 		if ($isSelect) {
 			foreach (static::HANDLED_TABLES as $table) {
 				[$db, $dbTable] = explode('.', $table);
-				if (preg_match("/`?$db`?\.`?$dbTable`?/", $request->payload)) {
+				if (preg_match("/`?$db`?\.`?$dbTable`?/i", $request->payload)) {
 					return true;
 				}
 			}
