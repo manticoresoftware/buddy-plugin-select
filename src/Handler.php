@@ -72,7 +72,8 @@ final class Handler extends BaseHandler {
 
 			// 2. Other cases with normal select * from [table]
 			if (stripos(
-				'information_schema.files|information_schema.triggers|information_schema.column_statistics',
+				'information_schema.files|information_schema.triggers|information_schema.column_statistics'
+				. '|information_schema.events|information_schema.schemata',
 				$payload->table
 			) !== false
 			) {

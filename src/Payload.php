@@ -23,6 +23,8 @@ final class Payload extends BasePayload {
 		'information_schema.triggers',
 		'information_schema.column_statistics',
 		'information_schema.columns',
+		'information_schema.events',
+		'information_schema.schemata',
 	];
 
 	/** @var string */
@@ -55,7 +57,7 @@ final class Payload extends BasePayload {
 
 		// Match fields
 		preg_match(
-			'/^SELECT\s+(?:(.*?)\s+FROM\s+(`?[a-z][a-z\_\-0-9]*`?(\.[a-z][a-z\_\-0-9]*)?)|(version\(\)))/is',
+			'/^SELECT\s+(?:(.*?)\s+FROM\s+(`?[a-z][a-z\_\-0-9]*`?(\.`?[a-z][a-z\_\-0-9]*`?)?)|(version\(\)))/is',
 			$self->originalQuery,
 			$matches
 		);
@@ -65,7 +67,7 @@ final class Payload extends BasePayload {
 		// we put this function in fields and table will be empty
 		// otherwise it's normal select with fields and table required
 		if ($matches[2] ?? null) {
-			$self->table = str_replace('`manticore`.', 'manticore.', strtolower(ltrim($matches[2], '.')));
+			$self->table = str_replace('`', '', strtolower(ltrim($matches[2], '.')));
 			$pattern = '/(?:[^,(]+|(\((?>[^()]+|(?1))*\)))+/';
 			preg_match_all($pattern, $matches[1], $matches);
 			$self->fields = array_map('trim', $matches[0]);
@@ -84,7 +86,6 @@ final class Payload extends BasePayload {
 					'value' => (string)$value,
 				];
 			}
-
 			// Check that we hit tables that we support otherwise return standard error
 			// To proxy original one
 			if (!str_contains($request->error, "unsupported filter type 'string' on attribute")
@@ -109,7 +110,10 @@ final class Payload extends BasePayload {
 	public function getTaskResult(): TaskResult {
 		$result = TaskResult::withTotal(0);
 		foreach ($this->fields as $field) {
-			$result->column($field, Column::String);
+			if (stripos($field, ' AS ') !== false) {
+				[, $field] = (array)preg_split('/ AS /i', $field);
+			}
+			$result->column(trim((string)$field, '`'), Column::String);
 		}
 
 		return $result;
@@ -123,7 +127,8 @@ final class Payload extends BasePayload {
 		$isSelect = stripos($request->payload, 'select') === 0;
 		if ($isSelect) {
 			foreach (static::HANDLED_TABLES as $table) {
-				if (stripos($request->payload, $table) !== false) {
+				[$db, $dbTable] = explode('.', $table);
+				if (preg_match("/`?$db`?\.`?$dbTable`?/", $request->payload)) {
 					return true;
 				}
 			}
