@@ -71,12 +71,7 @@ final class Handler extends BaseHandler {
 			}
 
 			// 2. Other cases with normal select * from [table]
-			if (stripos(
-				'information_schema.files|information_schema.triggers|information_schema.column_statistics'
-				. '|information_schema.events|information_schema.schemata',
-				$payload->table
-			) !== false
-			) {
+			if ($payload::HANDLED_TABLES[strtolower($payload->table)] === 0) {
 				return $payload->getTaskResult();
 			}
 
@@ -157,13 +152,19 @@ final class Handler extends BaseHandler {
 	 * @return TaskResult
 	 */
 	protected static function handleFieldCount(HTTPClient $manticoreClient, Payload $payload): TaskResult {
-		$table = $payload->where['table_name']['value'];
+		$table = $payload->where['table_name']['value'] ?? $payload->where['TABLE_NAME']['value'];
 		$query = "DESC {$table}";
 		/** @var array{0:array{data:array<mixed>}} */
 		$descResult = $manticoreClient->sendRequest($query)->getResult();
 		$count = sizeof($descResult[0]['data']);
 		return TaskResult::withRow(['COUNT(*)' => $count])
 			->column('COUNT(*)', Column::String);
+	}
+
+	protected static function handleSelectUnsupported(Payload $payload): TaskResult {
+		$data = [];
+		$result = $payload->getTaskResult();
+		return $result->data($data);
 	}
 
 	/**
@@ -176,7 +177,7 @@ final class Handler extends BaseHandler {
 			return static::handleFieldCount($manticoreClient, $payload);
 		}
 
-		$table = $payload->where['table_name']['value'] ?? null;
+		$table = $payload->where['table_name']['value'] ?? $payload->where['TABLE_NAME']['value'] ?? null;
 		$data = [];
 		if ($table) {
 			$query = "SHOW CREATE TABLE {$table}";
@@ -191,7 +192,8 @@ final class Handler extends BaseHandler {
 					$row = static::parseTableSchema($createTable);
 					$data[$i] = [];
 					foreach ($payload->fields as $field) {
-						[$type, $value] = static::TABLES_FIELD_MAP[$field] ?? ['field', $field];
+						[$type, $value] = static::TABLES_FIELD_MAP[$field]
+							?? static::TABLES_FIELD_MAP[strtolower($field)] ?? ['field', $field];
 						$data[$i][$field] = match ($type) {
 							'field' => $row[$value],
 							'table' => $table,
@@ -240,12 +242,43 @@ final class Handler extends BaseHandler {
 	}
 
 	/**
+	 * Helper function to populate response data for `*` select queries
+	 *
+	 * @param string $field
+	 * @param string $value
+	 * @param array<mixed> $fields
+	 * @param array<mixed> $dataRow
+	 * @return void
+	 */
+	protected static function addSelectRowData(
+		string $field,
+		string $value,
+		array &$fields,
+		array &$dataRow
+	): void {
+		foreach (static::COLUMNS_FIELD_MAP as $mapKey => $mapInfo) {
+			$mapKey = strtoupper($mapKey);
+			if ($mapInfo[1] !== $field) {
+				continue;
+			}
+			if (!in_array($mapKey, $fields)) {
+				array_push($fields, $mapKey);
+			}
+			$dataRow[$mapKey] = $value;
+		}
+	}
+
+	/**
 	 * @param HTTPClient $manticoreClient
 	 * @param Payload $payload
 	 * @return TaskResult
 	 */
 	protected static function handleSelectFromColumns(HTTPClient $manticoreClient, Payload $payload): TaskResult {
-		$table = $payload->where['table_name']['value'];
+		$table = $payload->where['table_name']['value'] ?? $payload->where['TABLE_NAME']['value'] ?? null;
+		// As for now, if an original query does not contain a table name we definitely cannot process it
+		if ($table === null) {
+			return $payload->getTaskResult();
+		}
 
 		$query = "DESC {$table}";
 		/** @var array<array{data:array<array<string,string>>}> */
@@ -253,15 +286,25 @@ final class Handler extends BaseHandler {
 
 		$data = [];
 		$i = 0;
+		$areAllColumnsSelected = sizeof($payload->fields) === 1 && $payload->fields[0] === '*';
+		if ($areAllColumnsSelected) {
+			$payload->fields = [];
+		}
 		foreach ($descResult[0]['data'] as $row) {
 			$data[$i] = [];
-			foreach ($payload->fields as $field) {
-				[$type, $value] = static::COLUMNS_FIELD_MAP[$field] ?? ['field', $field];
-				$data[$i][$field] = match ($type) {
-					'field' => $row[$value],
-					'static' => $value,
-					// default => $row[$field] ?? null,
-				};
+			if ($areAllColumnsSelected) {
+				foreach ($row as $field => $value) {
+					self::addSelectRowData($field, $value, $payload->fields, $data[$i]);
+				}
+			} else {
+				foreach ($payload->fields as $field) {
+					[$type, $value] = static::COLUMNS_FIELD_MAP[$field] ?? ['field', $field];
+					$data[$i][$field] = match ($type) {
+						'field' => $row[$value],
+						'static' => $value,
+						// default => $row[$field] ?? null,
+					};
+				}
 			}
 			++$i;
 		}
@@ -392,15 +435,46 @@ final class Handler extends BaseHandler {
 	}
 
 	/**
+	 * Remove table alias syntax from query if exists
+	 *
+	 * @param Payload $payload
+	 * @param string $query
+	 * @return void
+	 */
+	protected static function checkQueryForAliasSyntax(Payload &$payload, string &$query): void {
+		$alias = false;
+		if ($payload->fields) {
+			$i = 0;
+			do {
+				$field = $payload->fields[$i];
+				if (str_ends_with($field, '.*')) {
+					$alias = str_replace('.*', '', $field);
+					$payload->fields[$i] = '*';
+					$query = str_replace("$field", '*', $query);
+				}
+				$i++;
+			} while ($alias === false && $i < sizeof($payload->fields));
+		}
+		if ($alias === false) {
+			return;
+		}
+		$query = preg_replace("/{$payload->table}\s+$alias\s+/i", $payload->table . ' ', $query);
+	}
+
+	/**
 	 * @param HTTPClient $manticoreClient
 	 * @param Payload $payload
 	 * @return TaskResult
 	 */
 	protected static function handleSelectDatabasePrefixed(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+		$query = $payload->originalQuery;
+
+		self::checkQueryForAliasSyntax($payload, $query);
+
 		$query = str_ireplace(
 			['`Manticore`.', 'Manticore.'],
 			'',
-			$payload->originalQuery
+			$query
 		);
 
 		// Replace all as `Sum(...)` or kind of to something that is supported by Manticore

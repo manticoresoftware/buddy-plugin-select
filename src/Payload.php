@@ -17,14 +17,21 @@ use Manticoresearch\Buddy\Core\Task\Column;
 use Manticoresearch\Buddy\Core\Task\TaskResult;
 
 final class Payload extends BasePayload {
+	// HANDLED_TABLES value defines if we actually process the request and return some data (1)
+	// or just return an empty result (0)
 	const HANDLED_TABLES = [
-		'information_schema.files',
-		'information_schema.tables',
-		'information_schema.triggers',
-		'information_schema.column_statistics',
-		'information_schema.columns',
-		'information_schema.events',
-		'information_schema.schemata',
+		'information_schema.files' => 0,
+		'information_schema.tables' => 1,
+		'information_schema.triggers' => 0,
+		'information_schema.column_statistics' => 0,
+		'information_schema.columns' => 1,
+		'information_schema.events' => 0,
+		'information_schema.schemata' => 0,
+		'information_schema.key_column_usage' => 0,
+		'information_schema.statistics' => 0,
+		'information_schema.partitions' => 0,
+		'information_schema.routines' => 0,
+		'mysql.user' => 0,
 	];
 
 	/** @var string */
@@ -68,7 +75,6 @@ final class Payload extends BasePayload {
 		// otherwise it's normal select with fields and table required
 		if ($matches[2] ?? null) {
 			$self->table = str_replace('`', '', strtolower(ltrim($matches[2], '.')));
-			echo 'TEST ' . $self->table . PHP_EOL;
 			$pattern = '/(?:[^,(]+|(\((?>[^()]+|(?1))*\)))+/';
 			preg_match_all($pattern, $matches[1], $matches);
 			$self->fields = array_map('trim', $matches[0]);
@@ -90,7 +96,7 @@ final class Payload extends BasePayload {
 			// Check that we hit tables that we support otherwise return standard error
 			// To proxy original one
 			if (!str_contains($request->error, "unsupported filter type 'string' on attribute")
-				&& !in_array($self->table, static::HANDLED_TABLES)
+				&& !isset(static::HANDLED_TABLES[$self->table])
 				&& !str_starts_with($self->table, 'manticore')
 			) {
 				throw QueryParseError::create('Failed to handle your select query', true);
@@ -127,7 +133,7 @@ final class Payload extends BasePayload {
 	public static function hasMatch(Request $request): bool {
 		$isSelect = stripos($request->payload, 'select') === 0;
 		if ($isSelect) {
-			foreach (static::HANDLED_TABLES as $table) {
+			foreach (array_keys(static::HANDLED_TABLES) as $table) {
 				[$db, $dbTable] = explode('.', $table);
 				if (preg_match("/`?$db`?\.`?$dbTable`?/i", $request->payload)) {
 					return true;
@@ -186,4 +192,5 @@ final class Payload extends BasePayload {
 
 		return false;
 	}
+
 }

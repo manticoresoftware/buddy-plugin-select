@@ -21,6 +21,7 @@ use Manticoresearch\Buddy\CoreTest\Trait\TestInEnvironmentTrait;
 use Manticoresearch\Buddy\Plugin\Select\Handler;
 use Manticoresearch\Buddy\Plugin\Select\Payload;
 use PHPUnit\Framework\TestCase;
+use parallel\Runtime;
 
 class UnsupportedStmtHandlerTest extends TestCase {
 
@@ -32,18 +33,24 @@ class UnsupportedStmtHandlerTest extends TestCase {
 	 */
 	public static $manticoreClient;
 
+	/**
+	 * @var Runtime $runtime
+	 */
+	public static $runtime;
+
 	public static function setUpBeforeClass(): void {
 		self::setTaskRuntime();
 		$serverUrl = self::setUpMockManticoreServer(false);
 		self::setBuddyVersion();
 		self::$manticoreClient = new HTTPClient(new Response(), $serverUrl);
+		self::$runtime = Task::createRuntime();
 	}
 
 	public static function tearDownAfterClass(): void {
 		self::finishMockManticoreServer();
 	}
 
-	public function testSelectFromInformationSchemaExecutionOk():void {
+	public function testColumnSelectFromInformationSchemaExecutionOk():void {
 		echo "\nTesting the execution of SELECT FROM information_schema.*\n";
 		$columns = [
 			[
@@ -55,6 +62,50 @@ class UnsupportedStmtHandlerTest extends TestCase {
 			'SELECT DEFAULT_COLLATION_NAME as TEST FROM `information_schema`.`schemata`',
 			'SELECT `DEFAULT_COLLATION_NAME` as `TEST` FROM information_schema.schemata',
 			'SELECT DEFAULT_COLLATION_NAME as `TEST` FROM INFORMATION_SCHEMA.SCHEMATA',
+			"SELECT TEST FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA='Manticore' "
+			. "AND REFERENCED_TABLE_NAME IS NULL AND TABLE_NAME='test'",
+		];
+
+		foreach ($testingSet as $query) {
+			$this->checkExecutionResult($query, $columns, []);
+		}
+	}
+
+	public function testSelectFromInformationSchemaExecutionOk():void {
+		echo "\nTesting the execution of SELECT FROM information_schema.*\n";
+		$columns = [
+			[
+				'*' => ['type' => 'string'],
+			],
+		];
+		$testingSet = [
+			'SELECT * FROM information_schema.events',
+			'SELECT * FROM information_schema.routines',
+			'SELECT * FROM information_schema.partitions',
+			'SELECT * FROM information_schema.statistics',
+			"SELECT * FROM information_schema.EVENTS WHERE EVENT_SCHEMA='Manticore'",
+			"SELECT * FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA='Manticore'"
+			. "AND ROUTINE_TYPE IN ('PROCEDURE','FUNCTION')",
+			"SELECT * FROM information_schema.PARTITIONS WHERE TABLE_SCHEMA='Manticore' AND TABLE_NAME='test'",
+			"SELECT * FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='Manticore' AND TABLE_NAME='test'"
+			. 'ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX',
+		];
+
+		foreach ($testingSet as $query) {
+			$this->checkExecutionResult($query, $columns, []);
+		}
+	}
+
+	public function testSelectFromMySqlUserOk():void {
+		echo "\nTesting the execution of SELECT FROM mysql.user.*\n";
+		$columns = [
+			[
+				'*' => ['type' => 'string'],
+			],
+		];
+		$testingSet = [
+			'SELECT * FROM mysql.user',
+			'SELECT * FROM mysql.user ORDER BY user',
 		];
 
 		foreach ($testingSet as $query) {
@@ -65,7 +116,7 @@ class UnsupportedStmtHandlerTest extends TestCase {
 	public function testSelectFromInformationSchemaExecutionFail():void {
 		echo "\nTesting the execution of a select from an information_schema's table is not handled by Buddy\n";
 		$testingSet = [
-			'SELECT * FROM information_schema.routines',
+			'SELECT * FROM information_schema.role_table_grants',
 		];
 
 		foreach ($testingSet as $query) {
@@ -99,7 +150,7 @@ class UnsupportedStmtHandlerTest extends TestCase {
 			$handler = new Handler($payload);
 			$handler->setManticoreClient(self::$manticoreClient);
 
-			$task = $handler->run(Task::createRuntime());
+			$task = $handler->run(self::$runtime);
 			$task->wait();
 
 			$this->assertEquals(true, $task->isSucceed());
