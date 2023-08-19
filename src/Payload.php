@@ -46,13 +46,42 @@ final class Payload extends BasePayload {
 	/** @var array<string> */
 	public array $fields = [];
 
+	/** @var array<string> */
+	public array $values = [];
+
 	/** @var array<string,array{operator:string,value:int|string|bool}> */
 	public array $where = [];
 
 	public function __construct() {
 	}
 
-  /**
+	/**
+	 * Helper function to add where statements to the Payload object
+	 *
+	 * @param string $payload
+	 * @return array<string,array{operator:string,value:int|string|bool}>
+	 */
+	protected static function addWhereStatements(string $payload): array {
+		// Match WHERE statements
+		$where = [];
+		$matches = [];
+		$pattern = '/([@a-zA-Z0-9_]+)\s*(=|<|>|!=|<>|'
+			. 'NOT LIKE|LIKE|NOT IN|IN)'
+			. "\s*(?:\('([^']+)'\)|'([^']+)'|([0-9]+))/";
+		preg_match_all($pattern, $payload, $matches);
+		foreach ($matches[1] as $i => $column) {
+			$operator = $matches[2][$i];
+			$value = $matches[3][$i] !== '' ? $matches[3][$i] : $matches[4][$i];
+			$where[(string)$column] = [
+				'operator' => (string)$operator,
+				'value' => (string)$value,
+			];
+		}
+
+		return $where;
+	}
+
+	/**
 	 * @param Request $request
 	 * @return static
 	 * @throws QueryParseError
@@ -64,7 +93,8 @@ final class Payload extends BasePayload {
 
 		// Match fields
 		preg_match(
-			'/^SELECT\s+(?:(.*?)\s+FROM\s+(`?[a-z][a-z\_\-0-9]*`?(\.`?[a-z][a-z\_\-0-9]*`?)?)|(version\(\)))/is',
+			'/^SELECT\s+(?:(.*?)\s+FROM\s+(`?[a-z][a-z\_\-0-9]*`?(\.`?[a-z][a-z\_\-0-9]*`?)?)'
+				. '|(version\(\))|(\'[^\']*?\'))/is',
 			$self->originalQuery,
 			$matches
 		);
@@ -74,25 +104,17 @@ final class Payload extends BasePayload {
 		// we put this function in fields and table will be empty
 		// otherwise it's normal select with fields and table required
 		if ($matches[2] ?? null) {
-			$self->table = str_replace('`', '', strtolower(ltrim($matches[2], '.')));
+			$table = strtolower(ltrim((string)$matches[2], '.'));
+			if ($table[0] === '`' || $table[-1] === '`') {
+				$table = trim((string)preg_replace('/`?\.`?/', '.', $table), '`');
+			}
+			$self->table = $table;
 			$pattern = '/(?:[^,(]+|(\((?>[^()]+|(?1))*\)))+/';
 			preg_match_all($pattern, $matches[1], $matches);
 			$self->fields = array_map('trim', $matches[0]);
 
-			// Match WHERE statements
-			$matches = [];
-			$pattern = '/([@a-zA-Z0-9_]+)\s*(=|<|>|!=|<>|'
-				. 'NOT LIKE|LIKE|NOT IN|IN)'
-				. "\s*(?:\('([^']+)'\)|'([^']+)'|([0-9]+))/";
-			preg_match_all($pattern, $request->payload, $matches);
-			foreach ($matches[1] as $i => $column) {
-				$operator = $matches[2][$i];
-				$value = $matches[3][$i] !== '' ? $matches[3][$i] : $matches[4][$i];
-				$self->where[(string)$column] = [
-					'operator' => (string)$operator,
-					'value' => (string)$value,
-				];
-			}
+			$self->where = self::addWhereStatements($request->payload);
+
 			// Check that we hit tables that we support otherwise return standard error
 			// To proxy original one
 			if (!str_contains($request->error, "unsupported filter type 'string' on attribute")
@@ -102,7 +124,11 @@ final class Payload extends BasePayload {
 				throw QueryParseError::create('Failed to handle your select query', true);
 			}
 		} else {
-			$self->fields[] = $matches[4];
+			if (isset($matches[5])) {
+				$self->values = [trim($matches[5], "'")];
+			} else {
+				$self->fields[] = $matches[4];
+			}
 		}
 
 		return $self;
@@ -172,13 +198,13 @@ final class Payload extends BasePayload {
 			return true;
 		}
 
-		if (str_contains($request->error, "unexpected '(' near '(")
+		if (str_contains($request->error, "unexpected '('")
 			&& stripos($request->payload, 'coalesce') !== false
 		) {
 			return true;
 		}
 
-		if (str_contains($request->error, "unexpected '(' near '(")
+		if (str_contains($request->error, "unexpected '('")
 			&& stripos($request->payload, 'contains') !== false
 		) {
 			return true;
@@ -190,7 +216,10 @@ final class Payload extends BasePayload {
 			return true;
 		}
 
+		if (str_contains($request->error, 'unexpected $end')) {
+			return true;
+		}
+
 		return false;
 	}
-
 }
