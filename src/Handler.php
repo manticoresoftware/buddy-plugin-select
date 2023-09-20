@@ -53,7 +53,12 @@ final class Handler extends BaseHandler {
 	 */
 	public function run(Runtime $runtime): Task {
 		$this->manticoreClient->setPath($this->payload->path);
-		$taskFn = static function (Payload $payload, HTTPClient $manticoreClient): TaskResult {
+		$taskFn = static function (string $args): TaskResult {
+			/** @var Payload $payload */
+			/** @var HTTPClient $manticoreClient */
+			/** @phpstan-ignore-next-line */
+			[$payload, $manticoreClient] = unserialize($args);
+
 			if ($payload->values) {
 				return static::handleSelectValues($payload);
 			}
@@ -91,7 +96,9 @@ final class Handler extends BaseHandler {
 		};
 
 		return Task::createInRuntime(
-			$runtime, $taskFn, [$this->payload, $this->manticoreClient]
+			$runtime,
+			$taskFn,
+			[serialize([$this->payload, $this->manticoreClient])]
 		)->run();
 	}
 
