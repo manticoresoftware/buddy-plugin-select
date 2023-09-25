@@ -98,14 +98,32 @@ final class Payload extends BasePayload {
 				throw QueryParseError::create('Failed to handle your select query', true);
 			}
 		} else {
-			if (isset($matches[5])) {
-				$self->values = [trim($matches[5], "'")];
-			} else {
-				$self->fields[] = $matches[4];
-			}
+			$self->handleNoTableMatches($matches);
 		}
 
 		return $self;
+	}
+
+	/**
+	 * Handle no table matches from select query
+	 * @param  array<string>  $matches
+	 * @return static
+	 */
+	protected function handleNoTableMatches(array $matches): static {
+		if (isset($matches[5])) {
+			$this->values = [trim($matches[5], "'")];
+		} elseif (isset($matches[4])) {
+			$this->fields[] = $matches[4];
+		} elseif (stripos($this->originalQuery, 'database()') !== false
+		&& stripos($this->originalQuery, 'schema()') !== false
+		&& stripos($this->originalQuery, 'left(user()') !== false) {
+			$this->fields = [
+				'database',
+				'schema',
+				'user',
+			];
+		}
+		return $this;
 	}
 
 	/**
@@ -190,6 +208,10 @@ final class Payload extends BasePayload {
 			return true;
 		}
 
+		if (str_contains($request->error, "unexpected '('")
+			&& str_contains($request->error, "expecting \$end near ')'")) {
+			return true;
+		}
 		return false;
 	}
 }

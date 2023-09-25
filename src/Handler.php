@@ -58,7 +58,6 @@ final class Handler extends BaseHandler {
 			/** @var HTTPClient $manticoreClient */
 			/** @phpstan-ignore-next-line */
 			[$payload, $manticoreClient] = unserialize($args);
-
 			if ($payload->values) {
 				return static::handleSelectValues($payload);
 			}
@@ -72,6 +71,11 @@ final class Handler extends BaseHandler {
 				|| stripos($payload->originalQuery, 'Manticore.') > 0
 			) {
 				return static::handleSelectDatabasePrefixed($manticoreClient, $payload);
+			}
+
+			// 0. Handle datagrip query
+			if (!$payload->table && $payload->fields === ['database', 'schema', 'user']) {
+				return static::handleSelectDatagrip($payload);
 			}
 
 			// 1. Handle empty table case first
@@ -537,6 +541,23 @@ final class Handler extends BaseHandler {
 		return TaskResult::withRow(['Value' => $payload->values[0]])
 			->column('Value', Column::String);
 	}
+
+	/**
+	 * @param Payload $payload
+	 * @return TaskResult
+	 */
+	protected static function handleSelectDatagrip(Payload $payload): TaskResult {
+		$result = TaskResult::withData(
+			[
+			array_fill_keys($payload->fields, 'manticore'),
+			]
+		);
+		foreach ($payload->fields as $column) {
+			$result->column($column, Column::String);
+		}
+		return $result;
+	}
+
 
 	/**
 	 * @param array{0:array{columns:array<array<string,mixed>>,data:array<array<string,string>>}} $result
