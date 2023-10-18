@@ -11,13 +11,12 @@
 namespace Manticoresearch\Buddy\Plugin\Select;
 
 use Exception;
-use Manticoresearch\Buddy\Core\ManticoreSearch\Client as HTTPClient;
+use Manticoresearch\Buddy\Core\ManticoreSearch\Client;
 use Manticoresearch\Buddy\Core\Plugin\BaseHandler;
 use Manticoresearch\Buddy\Core\Task\Column;
 use Manticoresearch\Buddy\Core\Task\Task;
 use Manticoresearch\Buddy\Core\Task\TaskResult;
 use RuntimeException;
-use parallel\Runtime;
 
 final class Handler extends BaseHandler {
 	const TABLES_FIELD_MAP = [
@@ -33,8 +32,8 @@ final class Handler extends BaseHandler {
 		'data_type' => ['field', 'Type'],
 	];
 
-  /** @var HTTPClient $manticoreClient */
-	protected HTTPClient $manticoreClient;
+  /** @var Client $manticoreClient */
+	protected Client $manticoreClient;
 
 	/**
 	 * Initialize the executor
@@ -51,13 +50,9 @@ final class Handler extends BaseHandler {
 	 * @return Task
 	 * @throws RuntimeException
 	 */
-	public function run(Runtime $runtime): Task {
+	public function run(): Task {
 		$this->manticoreClient->setPath($this->payload->path);
-		$taskFn = static function (string $args): TaskResult {
-			/** @var Payload $payload */
-			/** @var HTTPClient $manticoreClient */
-			/** @phpstan-ignore-next-line */
-			[$payload, $manticoreClient] = unserialize($args);
+		$taskFn = static function (Payload $payload, Client $manticoreClient): TaskResult {
 			if ($payload->values) {
 				return static::handleSelectValues($payload);
 			}
@@ -99,10 +94,9 @@ final class Handler extends BaseHandler {
 			};
 		};
 
-		return Task::createInRuntime(
-			$runtime,
+		return Task::create(
 			$taskFn,
-			[serialize([$this->payload, $this->manticoreClient])]
+			[$this->payload, $this->manticoreClient]
 		)->run();
 	}
 
@@ -116,10 +110,10 @@ final class Handler extends BaseHandler {
 	/**
 	 * Instantiating the http client to execute requests to Manticore server
 	 *
-	 * @param HTTPClient $client
-	 * $return HTTPClient
+	 * @param Client $client
+	 * $return Client
 	 */
-	public function setManticoreClient(HTTPClient $client): HTTPClient {
+	public function setManticoreClient(Client $client): Client {
 		$this->manticoreClient = $client;
 		return $this->manticoreClient;
 	}
@@ -142,11 +136,11 @@ final class Handler extends BaseHandler {
 	}
 
 	/**
-	 * @param HTTPClient $manticoreClient
+	 * @param Client $manticoreClient
 	 * @param Payload $payload
 	 * @return TaskResult
 	 */
-	protected static function handleMethods(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+	protected static function handleMethods(Client $manticoreClient, Payload $payload): TaskResult {
 		[$method] = $payload->fields;
 		[$query, $field] = match (strtolower($method)) {
 			'version()' => ["show status like 'mysql_version'", 'Value'],
@@ -159,11 +153,11 @@ final class Handler extends BaseHandler {
 	}
 
 	/**
-	 * @param HTTPClient $manticoreClient
+	 * @param Client $manticoreClient
 	 * @param Payload $payload
 	 * @return TaskResult
 	 */
-	protected static function handleFieldCount(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+	protected static function handleFieldCount(Client $manticoreClient, Payload $payload): TaskResult {
 		$table = $payload->where['table_name']['value'];
 		$query = "DESC {$table}";
 		/** @var array{0:array{data:array<mixed>}} */
@@ -174,11 +168,11 @@ final class Handler extends BaseHandler {
 	}
 
 	/**
-	 * @param HTTPClient $manticoreClient
+	 * @param Client $manticoreClient
 	 * @param Payload $payload
 	 * @return TaskResult
 	 */
-	protected static function handleSelectFromTables(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+	protected static function handleSelectFromTables(Client $manticoreClient, Payload $payload): TaskResult {
 		if (sizeof($payload->fields) === 1 && stripos($payload->fields[0], 'count(*)') === 0) {
 			return static::handleFieldCount($manticoreClient, $payload);
 		}
@@ -218,11 +212,11 @@ final class Handler extends BaseHandler {
 	}
 
 	/**
-	 * @param HTTPClient $manticoreClient
+	 * @param Client $manticoreClient
 	 * @param Payload $payload
 	 * @return array<array<string,string>>
 	 */
-	protected static function processSelectOtherFromFromTables(HTTPClient $manticoreClient, Payload $payload): array {
+	protected static function processSelectOtherFromFromTables(Client $manticoreClient, Payload $payload): array {
 		$data = [];
 		// grafana: SELECT DISTINCT TABLE_SCHEMA from information_schema.TABLES
 		// where TABLE_TYPE != 'SYSTEM VIEW' ORDER BY TABLE_SCHEMA
@@ -247,11 +241,11 @@ final class Handler extends BaseHandler {
 	}
 
 	/**
-	 * @param HTTPClient $manticoreClient
+	 * @param Client $manticoreClient
 	 * @param Payload $payload
 	 * @return TaskResult
 	 */
-	protected static function handleSelectFromColumns(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+	protected static function handleSelectFromColumns(Client $manticoreClient, Payload $payload): TaskResult {
 		$table = $payload->where['table_name']['value'];
 
 		$query = "DESC {$table}";
@@ -278,11 +272,11 @@ final class Handler extends BaseHandler {
 
 
 	/**
-	 * @param HTTPClient $manticoreClient
+	 * @param Client $manticoreClient
 	 * @param Payload $payload
 	 * @return TaskResult
 	 */
-	protected static function handleSelectFromExistingTable(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+	protected static function handleSelectFromExistingTable(Client $manticoreClient, Payload $payload): TaskResult {
 		$table = str_ireplace(
 			['`Manticore`.', 'Manticore.'],
 			'',
@@ -376,11 +370,11 @@ final class Handler extends BaseHandler {
 
 
 	/**
-	 * @param HTTPClient $manticoreClient
+	 * @param Client $manticoreClient
 	 * @param Payload $payload
 	 * @return TaskResult
 	 */
-	protected static function handleSelectCountOnField(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+	protected static function handleSelectCountOnField(Client $manticoreClient, Payload $payload): TaskResult {
 		$selectQuery = str_ireplace(
 			['`Manticore`.', 'Manticore.'],
 			'',
@@ -399,11 +393,11 @@ final class Handler extends BaseHandler {
 	}
 
 	/**
-	 * @param HTTPClient $manticoreClient
+	 * @param Client $manticoreClient
 	 * @param Payload $payload
 	 * @return TaskResult
 	 */
-	protected static function handleSelectDatabasePrefixed(HTTPClient $manticoreClient, Payload $payload): TaskResult {
+	protected static function handleSelectDatabasePrefixed(Client $manticoreClient, Payload $payload): TaskResult {
 		$query = str_ireplace(
 			['`Manticore`.', 'Manticore.'],
 			'',
