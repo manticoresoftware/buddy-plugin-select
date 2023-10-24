@@ -51,7 +51,6 @@ final class Handler extends BaseHandler {
 	 * @throws RuntimeException
 	 */
 	public function run(): Task {
-		$this->manticoreClient->setPath($this->payload->path);
 		$taskFn = static function (Payload $payload, Client $manticoreClient): TaskResult {
 			if ($payload->values) {
 				return static::handleSelectValues($payload);
@@ -148,7 +147,7 @@ final class Handler extends BaseHandler {
 		};
 
 		/** @var array{0:array{data:array{0:array{Databases:string,Value:string}}}} */
-		$queryResult = $manticoreClient->sendRequest($query)->getResult();
+		$queryResult = $manticoreClient->sendRequest($query, $payload->path)->getResult();
 		return $payload->getTaskResult()->row(['Value' => $queryResult[0]['data'][0][$field]]);
 	}
 
@@ -161,7 +160,7 @@ final class Handler extends BaseHandler {
 		$table = $payload->where['table_name']['value'];
 		$query = "DESC {$table}";
 		/** @var array{0:array{data:array<mixed>}} */
-		$descResult = $manticoreClient->sendRequest($query)->getResult();
+		$descResult = $manticoreClient->sendRequest($query, $payload->path)->getResult();
 		$count = sizeof($descResult[0]['data']);
 		return TaskResult::withRow(['COUNT(*)' => $count])
 			->column('COUNT(*)', Column::String);
@@ -182,7 +181,7 @@ final class Handler extends BaseHandler {
 		if ($table) {
 			$query = "SHOW CREATE TABLE {$table}";
 			/** @var array<array{data:array<array<string,string>>}> */
-			$schemaResult = $manticoreClient->sendRequest($query)->getResult();
+			$schemaResult = $manticoreClient->sendRequest($query, $payload->path)->getResult();
 			$createTable = $schemaResult[0]['data'][0]['Create Table'] ?? '';
 
 			if ($createTable) {
@@ -229,7 +228,7 @@ final class Handler extends BaseHandler {
 		} elseif (sizeof($payload->fields) === 1 && stripos($payload->fields[0], 'table_name') !== false) {
 			$query = 'SHOW TABLES';
 			/** @var array<array{data:array<array<string,string>>}> */
-			$tablesResult = $manticoreClient->sendRequest($query)->getResult();
+			$tablesResult = $manticoreClient->sendRequest($query, $payload->path)->getResult();
 			foreach ($tablesResult[0]['data'] as $row) {
 				$data[] = [
 					'TABLE_NAME' => $row['Index'],
@@ -250,7 +249,7 @@ final class Handler extends BaseHandler {
 
 		$query = "DESC {$table}";
 		/** @var array<array{data:array<array<string,string>>}> */
-		$descResult = $manticoreClient->sendRequest($query)->getResult();
+		$descResult = $manticoreClient->sendRequest($query, $payload->path)->getResult();
 
 		$data = [];
 		$i = 0;
@@ -307,7 +306,7 @@ final class Handler extends BaseHandler {
 
 		$query = "DESC {$table}";
 		/** @var array<array{data:array<array<string,string>>}> */
-		$descResult = $manticoreClient->sendRequest($query)->getResult();
+		$descResult = $manticoreClient->sendRequest($query, $payload->path)->getResult();
 
 		$isLikeOp = false;
 		foreach ($descResult[0]['data'] as $row) {
@@ -388,7 +387,7 @@ final class Handler extends BaseHandler {
 			throw new Exception('Failed to fix query');
 		}
 		/** @var array<array{data:array<array<string,string>>}> */
-		$selectResult = $manticoreClient->sendRequest($query)->getResult();
+		$selectResult = $manticoreClient->sendRequest($query, $payload->path)->getResult();
 		return TaskResult::raw($selectResult);
 	}
 
@@ -507,7 +506,7 @@ final class Handler extends BaseHandler {
 		}
 
 		/** @var array{error?:string} $queryResult */
-		$queryResult = $manticoreClient->sendRequest($query)->getResult();
+		$queryResult = $manticoreClient->sendRequest($query, $payload->path)->getResult();
 		if (isset($queryResult['error'])) {
 			$payload->originalQuery = $query;
 			$errors = [
