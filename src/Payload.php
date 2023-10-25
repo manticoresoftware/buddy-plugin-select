@@ -212,6 +212,10 @@ final class Payload extends BasePayload {
 			&& str_contains($request->error, "expecting \$end near ')'")) {
 			return true;
 		}
+
+		if (str_contains($request->error, "unexpected \$undefined near '.*")) {
+			return true;
+		}
 		return false;
 	}
 }
