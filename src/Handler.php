@@ -403,10 +403,6 @@ final class Handler extends BaseHandler {
 			$payload->originalQuery
 		);
 
-		if (str_contains($query, 't.*')) {
-			$query = preg_replace('/\s+t\b|\b\./', '', $query);
-		}
-
 		// Replace all as `Sum(...)` or kind of to something that is supported by Manticore
 		$pattern = '/(?<=\s`)[^`]+(?=`)/i';
 		$query = preg_replace_callback(
