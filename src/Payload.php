@@ -17,12 +17,22 @@ use Manticoresearch\Buddy\Core\Task\Column;
 use Manticoresearch\Buddy\Core\Task\TaskResult;
 
 final class Payload extends BasePayload {
+	// HANDLED_TABLES value defines if we actually process the request and return some data (1)
+	// or just return an empty result (0)
 	const HANDLED_TABLES = [
-		'information_schema.files',
-		'information_schema.tables',
-		'information_schema.triggers',
-		'information_schema.column_statistics',
-		'information_schema.columns',
+		'information_schema.files' => 0,
+		'information_schema.tables' => 1,
+		'information_schema.triggers' => 0,
+		'information_schema.column_statistics' => 0,
+		'information_schema.columns' => 1,
+		'information_schema.events' => 0,
+		'information_schema.schemata' => 0,
+		'information_schema.key_column_usage' => 0,
+		'information_schema.statistics' => 0,
+		'information_schema.partitions' => 0,
+		'information_schema.referential_constraints' => 0,
+		'information_schema.routines' => 0,
+		'mysql.user' => 0,
 	];
 
 	/** @var string */
@@ -46,7 +56,7 @@ final class Payload extends BasePayload {
 	public function __construct() {
 	}
 
-  /**
+	/**
 	 * @param Request $request
 	 * @return static
 	 * @throws QueryParseError
@@ -58,8 +68,8 @@ final class Payload extends BasePayload {
 
 		// Match fields
 		preg_match(
-			'/^SELECT\s+(?:(.*?)\s+FROM\s+(`?[a-z][a-z\_\-0-9]*`?(\.[a-z][a-z\_\-0-9]*)?)'
-				. '|(version\(\))|(\'[^\']*?\'))/is',
+			'/^SELECT\s+(?:(.*?)\s+FROM\s+(`?[a-z][a-z\_\-0-9]*`?(\.`?[a-z][a-z\_\-0-9]*`?)?)'
+			. '|(version\(\))|(\'[^\']*?\'))/is',
 			$self->originalQuery,
 			$matches
 		);
@@ -69,32 +79,23 @@ final class Payload extends BasePayload {
 		// we put this function in fields and table will be empty
 		// otherwise it's normal select with fields and table required
 		if ($matches[2] ?? null) {
-			$self->table = str_replace('`manticore`.', 'manticore.', strtolower(ltrim($matches[2], '.')));
+			$table = strtolower(ltrim((string)$matches[2], '.'));
+			if ($table[0] === '`' || $table[-1] === '`') {
+				$table = trim((string)preg_replace('/`?\.`?/', '.', $table), '`');
+			}
+			$self->table = $table;
 			$pattern = '/(?:[^,(]+|(\((?>[^()]+|(?1))*\)))+/';
 			preg_match_all($pattern, $matches[1], $matches);
 			$self->fields = array_map('trim', $matches[0]);
 
-			// Match WHERE statements
-			$matches = [];
-			$pattern = '/([@a-zA-Z0-9_]+)\s*(=|<|>|!=|<>|'
-				. 'NOT LIKE|LIKE|NOT IN|IN)'
-				. "\s*(?:\('([^']+)'\)|'([^']+)'|([0-9]+))/";
-			preg_match_all($pattern, $request->payload, $matches);
-			foreach ($matches[1] as $i => $column) {
-				$operator = $matches[2][$i];
-				$value = $matches[3][$i] !== '' ? $matches[3][$i] : $matches[4][$i];
-				$self->where[(string)$column] = [
-					'operator' => (string)$operator,
-					'value' => (string)$value,
-				];
-			}
+			$self->where = self::addWhereStatements($request->payload);
 
 			// Check that we hit tables that we support otherwise return standard error
 			// To proxy original one
 			if (!str_contains($request->error, "unsupported filter type 'string' on attribute")
-				&& !in_array($self->table, static::HANDLED_TABLES)
+				&& !isset(static::HANDLED_TABLES[$self->table])
 				&& !str_starts_with($self->table, 'manticore')
-			) {
+				) {
 				throw QueryParseError::create('Failed to handle your select query', true);
 			}
 		} else {
@@ -102,6 +103,32 @@ final class Payload extends BasePayload {
 		}
 
 		return $self;
+	}
+
+	/**
+	 * Helper function to add where statements to the Payload object
+	 *
+	 * @param string $payload
+	 * @return array<string,array{operator:string,value:int|string|bool}>
+	 */
+	protected static function addWhereStatements(string $payload): array {
+		// Match WHERE statements
+		$where = [];
+		$matches = [];
+		$pattern = '/([@a-zA-Z0-9_]+)\s*(=|<|>|!=|<>|'
+			. 'NOT LIKE|LIKE|NOT IN|IN)'
+			. "\s*(?:\('([^']+)'\)|'([^']+)'|([0-9]+))/";
+		preg_match_all($pattern, $payload, $matches);
+		foreach ($matches[1] as $i => $column) {
+			$operator = $matches[2][$i];
+			$value = $matches[3][$i] !== '' ? $matches[3][$i] : $matches[4][$i];
+			$where[(string)$column] = [
+				'operator' => (string)$operator,
+				'value' => (string)$value,
+			];
+		}
+
+		return $where;
 	}
 
 	/**
@@ -135,7 +162,10 @@ final class Payload extends BasePayload {
 	public function getTaskResult(): TaskResult {
 		$result = TaskResult::withTotal(0);
 		foreach ($this->fields as $field) {
-			$result->column($field, Column::String);
+			if (stripos($field, ' AS ') !== false) {
+				[, $field] = (array)preg_split('/ AS /i', $field);
+			}
+			$result->column(trim((string)$field, '`'), Column::String);
 		}
 
 		return $result;
@@ -148,8 +178,9 @@ final class Payload extends BasePayload {
 	public static function hasMatch(Request $request): bool {
 		$isSelect = stripos($request->payload, 'select') === 0;
 		if ($isSelect) {
-			foreach (static::HANDLED_TABLES as $table) {
-				if (stripos($request->payload, $table) !== false) {
+			foreach (array_keys(static::HANDLED_TABLES) as $table) {
+				[$db, $dbTable] = explode('.', $table);
+				if (preg_match("/`?$db`?\.`?$dbTable`?/i", $request->payload)) {
 					return true;
 				}
 			}
