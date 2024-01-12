@@ -2145,6 +2145,7 @@
             "homepage": "https://symfony.com",
             "support": {
                 "source": "https://github.com/symfony/process/tree/v7.0.2"
+            },
             "funding": [
                 {
                     "url": "https://symfony.com/sponsor",
